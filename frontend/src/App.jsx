@@ -107,6 +107,14 @@ export default function App() {
     setEdgeTypeFilter((prev) => ({ ...prev, [type]: !prev[type] }));
   }
 
+  const summaryItems = [
+    { label: "Mode", value: viewMode },
+    { label: "Files", value: filePaths.length },
+    { label: "Nodes", value: `${filteredGraph.nodes.length}/${graph.nodes.length}` },
+    { label: "Edges", value: `${filteredGraph.edges.length}/${graph.edges.length}` },
+    { label: "Selected", value: selectedNode?.label || "-" },
+  ];
+
   return (
     <div className="app-shell">
       <header className="toolbar">
@@ -175,11 +183,12 @@ export default function App() {
         <span className="scope-text">Scope: {scopeDir || "Global"}</span>
       </div>
       <div className="stats-banner">
-        <span>Mode: {viewMode}</span>
-        <span>Files: {filePaths.length}</span>
-        <span>Nodes: {filteredGraph.nodes.length}/{graph.nodes.length}</span>
-        <span>Edges: {filteredGraph.edges.length}/{graph.edges.length}</span>
-        <span>Selected: {selectedNode?.label || "-"}</span>
+        {summaryItems.map((item) => (
+          <div className="stat-card" key={item.label}>
+            <span className="stat-label">{item.label}</span>
+            <span className="stat-value">{item.value}</span>
+          </div>
+        ))}
       </div>
 
       <main className="layout">
@@ -189,6 +198,18 @@ export default function App() {
         </aside>
         <section className="panel panel-center">
           <h3>Graph</h3>
+          <div className="graph-legend">
+            <span className="legend-title">Node Type</span>
+            <span className="legend-item directory">Directory</span>
+            <span className="legend-item file">File</span>
+            <span className="legend-item class">Class</span>
+            <span className="legend-item method">Method</span>
+            <span className="legend-title">Edge</span>
+            <span className="legend-line calls">calls</span>
+            <span className="legend-line imports">imports</span>
+            <span className="legend-line defines">defines</span>
+            <span className="legend-line contains">contains</span>
+          </div>
           {!graph.nodes.length && !loading && (
             <div className="graph-empty">
               Click Analyze to generate the repository graph.
@@ -206,6 +227,12 @@ export default function App() {
         </section>
         <aside className="panel panel-right">
           <h3>Code Viewer</h3>
+          <div className="guide-box">
+            <div className="guide-title">How to read this graph</div>
+            <div className="guide-text">Click a node to focus on its local neighborhood.</div>
+            <div className="guide-text">Use search to highlight matching nodes by name.</div>
+            <div className="guide-text">Click blank area to clear focus and return to overview.</div>
+          </div>
           <div className="snapshot-wrap">
             <div className="snapshot-head">
               <span>Graph Snapshot</span>

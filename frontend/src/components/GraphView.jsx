@@ -22,7 +22,10 @@ function toCytoscapeElements(graph) {
       kind: n.type === "directory" || n.id.startsWith("dir:") ? "directory" : n.type,
       degree: degree[n.id] || 0,
       file: n.file || "",
+      lineno: n.lineno || null,
+      end_lineno: n.end_lineno || null,
       code: n.code || "",
+      attributes: n.attributes || {},
     },
   }));
   const edges = graph.edges.map((e, idx) => ({
@@ -50,6 +53,38 @@ export default function GraphView({
   const cyRef = useRef(null);
   const onNodeSelectedRef = useRef(onNodeSelected);
   const onSnapshotReadyRef = useRef(onSnapshotReady);
+  const selectionNodeIdRef = useRef("");
+  const searchQueryRef = useRef("");
+
+  function applyFocus(cy, centerNode) {
+    const selectedId = selectionNodeIdRef.current;
+    const query = searchQueryRef.current;
+    cy.elements().removeClass("dimmed highlighted selected matched");
+
+    if (selectedId) {
+      const selected = cy.getElementById(selectedId);
+      if (selected.length) {
+        const neighborhood = selected.closedNeighborhood();
+        cy.elements().addClass("dimmed");
+        neighborhood.removeClass("dimmed");
+        neighborhood.addClass("highlighted");
+        selected.addClass("selected");
+        if (centerNode) cy.animate({ center: { eles: selected } }, { duration: 220 });
+      }
+    }
+
+    if (query) {
+      const matches = cy
+        .nodes()
+        .filter((n) => n.data("label").toLowerCase().includes(query) || n.id().toLowerCase().includes(query));
+      if (matches.length) {
+        if (!selectedId) cy.elements().addClass("dimmed");
+        matches.removeClass("dimmed");
+        matches.addClass("matched");
+        matches.connectedEdges().removeClass("dimmed");
+      }
+    }
+  }
 
   useEffect(() => {
     onNodeSelectedRef.current = onNodeSelected;
@@ -76,52 +111,58 @@ export default function GraphView({
         {
           selector: "node",
           style: {
-            "background-color": "#1f6feb",
-            color: "#111827",
+            "background-color": "#3b82f6",
+            color: "#0f172a",
             label: "data(label)",
-            "font-size": 11,
+            "font-size": 11.5,
+            "font-weight": 600,
             "text-wrap": "wrap",
             "text-max-width": 140,
             "text-background-color": "#ffffff",
-            "text-background-opacity": 0.72,
-            "text-background-padding": "2px",
+            "text-background-opacity": 0.84,
+            "text-background-padding": "3px",
             "text-outline-width": 0,
             "text-overflow-wrap": "anywhere",
             "min-zoomed-font-size": 8,
+            "border-width": 1.5,
+            "border-color": "#bfdbfe",
             width: "mapData(degree, 0, 30, 24, 56)",
             height: "mapData(degree, 0, 30, 24, 56)",
           },
         },
         {
           selector: 'node[type = "file"][kind != "directory"]',
-          style: { shape: "round-rectangle", "background-color": "#2f855a" },
+          style: { shape: "round-rectangle", "background-color": "#0f766e", "border-color": "#99f6e4" },
         },
         {
           selector: 'node[type = "class"]',
-          style: { shape: "diamond", "background-color": "#b7791f" },
+          style: { shape: "diamond", "background-color": "#b45309", "border-color": "#fde68a" },
         },
         {
           selector: 'node[type = "method"]',
-          style: { shape: "ellipse", "background-color": "#8b5cf6" },
+          style: { shape: "ellipse", "background-color": "#7c3aed", "border-color": "#ddd6fe" },
         },
         {
           selector: 'node[kind = "directory"]',
           style: {
             shape: "round-hexagon",
-            "background-color": "#0f766e",
+            "background-color": "#0369a1",
             "font-size": 12,
+            "font-weight": 700,
             "text-background-opacity": 0.85,
+            "border-color": "#7dd3fc",
           },
         },
         {
           selector: "edge",
           style: {
-            "line-color": "#93a1b0",
-            "target-arrow-color": "#93a1b0",
+            "line-color": "#94a3b8",
+            "target-arrow-color": "#94a3b8",
             "target-arrow-shape": "triangle",
             "curve-style": "bezier",
-            width: "mapData(weight, 1, 20, 1, 6)",
-            opacity: 0.85,
+            width: "mapData(weight, 1, 20, 1.2, 6.5)",
+            opacity: 0.72,
+            "arrow-scale": 0.9,
           },
         },
         {
@@ -150,11 +191,31 @@ export default function GraphView({
         },
         {
           selector: ".dimmed",
-          style: { opacity: 0.18 },
+          style: { opacity: 0.12 },
         },
         {
           selector: ".highlighted",
-          style: { opacity: 1, "border-width": 2, "border-color": "#f97316", "z-index": 20 },
+          style: { opacity: 1, "z-index": 20 },
+        },
+        {
+          selector: ".selected",
+          style: {
+            "border-width": 4,
+            "border-color": "#f97316",
+            "overlay-color": "#fb923c",
+            "overlay-opacity": 0.12,
+            "overlay-padding": 8,
+            "z-index": 30,
+          },
+        },
+        {
+          selector: ".matched",
+          style: {
+            "border-width": 3,
+            "border-color": "#f59e0b",
+            "text-background-color": "#fffbeb",
+            "text-background-opacity": 0.95,
+          },
         },
       ],
       layout: { name: "preset" },
@@ -165,10 +226,8 @@ export default function GraphView({
 
     cy.on("tap", "node", (evt) => {
       const node = evt.target;
-      const neighbors = node.closedNeighborhood();
-      cy.elements().addClass("dimmed");
-      neighbors.removeClass("dimmed");
-      neighbors.addClass("highlighted");
+      selectionNodeIdRef.current = node.id();
+      applyFocus(cy, false);
       if (onNodeSelectedRef.current) {
         onNodeSelectedRef.current(node.data());
       }
@@ -176,13 +235,15 @@ export default function GraphView({
 
     cy.on("tap", (evt) => {
       if (evt.target === cy) {
-        cy.elements().removeClass("dimmed highlighted");
+        selectionNodeIdRef.current = "";
+        applyFocus(cy, false);
       }
     });
 
     if (cy.nodes().length) {
       cy.one("layoutstop", () => {
         cy.fit(undefined, 60);
+        applyFocus(cy, false);
         if (onSnapshotReadyRef.current && enableSnapshot) {
           onSnapshotReadyRef.current(cy.png({ full: true, scale: 2, bg: "#ffffff" }));
         }
@@ -191,8 +252,8 @@ export default function GraphView({
         name: layoutName,
         animate: false,
         fit: true,
-        padding: 40,
-        spacingFactor: hasDirectoryNodes ? 1.3 : 1,
+        padding: 52,
+        spacingFactor: hasDirectoryNodes ? 1.55 : 1.15,
       }).run();
     } else if (onSnapshotReadyRef.current) {
       onSnapshotReadyRef.current("");
@@ -204,30 +265,16 @@ export default function GraphView({
 
   useEffect(() => {
     const cy = cyRef.current;
-    if (!cy || !selectedNodeId) return;
-    const node = cy.getElementById(selectedNodeId);
-    if (node.length) {
-      cy.elements().removeClass("dimmed highlighted");
-      const group = node.closedNeighborhood();
-      cy.elements().addClass("dimmed");
-      group.removeClass("dimmed");
-      group.addClass("highlighted");
-      cy.center(node);
-    }
+    if (!cy) return;
+    selectionNodeIdRef.current = selectedNodeId || "";
+    applyFocus(cy, true);
   }, [selectedNodeId]);
 
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    const query = (searchText || "").trim().toLowerCase();
-    cy.elements().removeClass("dimmed highlighted");
-    if (!query) return;
-    const matches = cy.nodes().filter((n) => n.data("label").toLowerCase().includes(query) || n.id().toLowerCase().includes(query));
-    if (matches.length) {
-      cy.elements().addClass("dimmed");
-      matches.removeClass("dimmed");
-      matches.addClass("highlighted");
-    }
+    searchQueryRef.current = (searchText || "").trim().toLowerCase();
+    applyFocus(cy, false);
   }, [searchText]);
 
   useEffect(() => {
@@ -247,7 +294,9 @@ export default function GraphView({
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy || !cy.nodes().length) return;
-    cy.elements().removeClass("dimmed highlighted");
+    selectionNodeIdRef.current = "";
+    searchQueryRef.current = "";
+    cy.elements().removeClass("dimmed highlighted selected matched");
     cy.fit(undefined, 60);
   }, [resetToken]);
 
