@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { fetchGraph } from "./api";
+import { explainFunction, fetchGraph } from "./api";
 import FileTree from "./components/FileTree";
 import GraphView from "./components/GraphView";
 import CodeViewer from "./components/CodeViewer";
@@ -25,6 +25,9 @@ export default function App() {
   const [resetToken, setResetToken] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [explainCache, setExplainCache] = useState({});
+  const [explainLoadingKey, setExplainLoadingKey] = useState("");
+  const [explainError, setExplainError] = useState("");
 
   const filePaths = useMemo(() => graph.files || [], [graph.files]);
 
@@ -37,6 +40,9 @@ export default function App() {
       setSelectedNode(null);
       setSelectedFile("");
       setScopeDir("");
+      setExplainCache({});
+      setExplainError("");
+      setExplainLoadingKey("");
       if (!data.nodes.length) {
         setError("Analysis finished but no Python nodes were found. Make sure the path contains .py files.");
       }
@@ -67,6 +73,37 @@ export default function App() {
     if (String(node.id).startsWith("dir:")) {
       const dirValue = String(node.id).replace("dir:", "");
       setScopeDir(dirValue === "(root)" ? "" : dirValue);
+    }
+    void triggerExplain(node, true);
+  }
+
+  function makeExplainKey(node) {
+    if (!node) return "";
+    return [node.id, node.file || "", node.lineno || "", node.end_lineno || "", (node.code || "").length].join("|");
+  }
+
+  function canExplain(node) {
+    if (!node) return false;
+    if (!node.code) return false;
+    return node.type === "function" || node.type === "method" || node.type === "class";
+  }
+
+  async function triggerExplain(node, auto = false) {
+    if (!canExplain(node)) return;
+    const key = makeExplainKey(node);
+    if (explainCache[key]) return;
+    if (explainLoadingKey === key) return;
+    setExplainError("");
+    setExplainLoadingKey(key);
+    try {
+      const result = await explainFunction(node);
+      setExplainCache((prev) => ({ ...prev, [key]: result }));
+    } catch (err) {
+      if (!auto) {
+        setExplainError(err.message || "Failed to explain function.");
+      }
+    } finally {
+      setExplainLoadingKey((current) => (current === key ? "" : current));
     }
   }
 
@@ -114,6 +151,9 @@ export default function App() {
     { label: "Edges", value: `${filteredGraph.edges.length}/${graph.edges.length}` },
     { label: "Selected", value: selectedNode?.label || "-" },
   ];
+  const selectedExplainKey = makeExplainKey(selectedNode);
+  const selectedExplanation = selectedExplainKey ? explainCache[selectedExplainKey] : null;
+  const selectedExplainLoading = selectedExplainKey && explainLoadingKey === selectedExplainKey;
 
   return (
     <div className="app-shell">
@@ -255,7 +295,14 @@ export default function App() {
               </div>
             )}
           </div>
-          <CodeViewer selected={selectedNode} />
+          <CodeViewer
+            selected={selectedNode}
+            explanation={selectedExplanation}
+            explainLoading={Boolean(selectedExplainLoading)}
+            explainError={explainError}
+            onExplain={() => triggerExplain(selectedNode, false)}
+            canExplain={canExplain(selectedNode)}
+          />
         </aside>
       </main>
     </div>

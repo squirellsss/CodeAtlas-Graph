@@ -47,7 +47,14 @@ function buildLocationQuery(selected) {
   return selected.file;
 }
 
-export default function CodeViewer({ selected }) {
+export default function CodeViewer({
+  selected,
+  explanation,
+  explainLoading = false,
+  explainError = "",
+  onExplain,
+  canExplain = false,
+}) {
   if (!selected) {
     return <div className="empty-state">Select a node to inspect its code.</div>;
   }
@@ -76,6 +83,22 @@ export default function CodeViewer({ selected }) {
       <div className="location-box">
         <strong>Location Query:</strong> {locationQuery || "-"}
       </div>
+      <div className="explain-actions">
+        <button className="button explain-btn" onClick={onExplain} disabled={!canExplain || explainLoading}>
+          {explainLoading ? "Explaining..." : "Explain this function"}
+        </button>
+        {!canExplain && <span className="empty-state">This node does not support LLM explanation.</span>}
+      </div>
+      {explainError && <div className="error-banner explain-error">{explainError}</div>}
+      {explanation && (
+        <div className="ai-insights">
+          <div><strong>Function Purpose:</strong> {explanation.purpose}</div>
+          <div><strong>Input Description:</strong> {explanation.inputs}</div>
+          <div><strong>Output Description:</strong> {explanation.outputs}</div>
+          <div><strong>Short Explanation:</strong> {explanation.short_explanation}</div>
+          <div className="insight-meta">Cache: {explanation.cached ? "hit" : "fresh"}</div>
+        </div>
+      )}
       <pre className="code-block">{selected.code || "No code snippet available for this node."}</pre>
     </div>
   );

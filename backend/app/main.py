@@ -6,9 +6,11 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .analyzer.graph_builder import analyze_repository
-from .models import GraphResponse
+from .ai_explainer import ExplainPayload, LLMExplainService
+from .models import ExplainRequest, ExplainResponse, GraphResponse
 
 app = FastAPI(title="Repository Graph Analyzer", version="1.0.0")
+explain_service = LLMExplainService()
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,3 +40,20 @@ def analyze(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/explain", response_model=ExplainResponse)
+def explain_function(request: ExplainRequest) -> ExplainResponse:
+    try:
+        return explain_service.explain(
+            ExplainPayload(
+                node_id=request.node_id,
+                node_type=request.node_type,
+                code=request.code,
+                file=request.file,
+                lineno=request.lineno,
+                end_lineno=request.end_lineno,
+            )
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

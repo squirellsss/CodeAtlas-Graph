@@ -392,6 +392,42 @@ body {
   background: #f8fafc;
 }
 
+.explain-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.button.explain-btn {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.explain-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.ai-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 1px solid #cfe3dc;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f0fdfa;
+  color: #134e4a;
+}
+
+.insight-meta {
+  color: #0f766e;
+  font-size: 11px;
+}
+
 .code-block {
   margin: 0;
   padding: 10px;

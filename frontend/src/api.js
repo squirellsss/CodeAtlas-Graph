@@ -20,3 +20,24 @@ export async function fetchGraph(path, options = {}) {
   }
   return response.json();
 }
+
+export async function explainFunction(node) {
+  const url = new URL("/explain", API_BASE);
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      node_id: node.id,
+      node_type: node.type,
+      code: node.code || "",
+      file: node.file || null,
+      lineno: node.lineno || null,
+      end_lineno: node.end_lineno || null,
+    }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || `Request failed: ${response.status}`);
+  }
+  return response.json();
+}
