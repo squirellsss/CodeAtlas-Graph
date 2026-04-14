@@ -314,6 +314,89 @@ body {
   overflow: auto;
 }
 
+.warnings-panel {
+  margin-top: 10px;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px;
+  min-height: 110px;
+}
+
+.warnings-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.warnings-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.warnings-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.warning-filter {
+  min-width: 132px;
+  height: 30px;
+  font-size: 12px;
+}
+
+.button.warning-toggle {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.warnings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.warning-help {
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.warning-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px;
+  font-size: 11px;
+}
+
+.warning-file {
+  color: #0f172a;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.warning-meta {
+  color: #b45309;
+  margin-top: 2px;
+}
+
+.warning-message {
+  color: #64748b;
+  margin-top: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .tree-item {
   display: flex;
   align-items: center;
@@ -375,6 +458,28 @@ body {
   overflow: hidden;
 }
 
+.viewer-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.viewer-tab {
+  border: 1px solid #dbe3ee;
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.viewer-tab.active {
+  background: #0f766e;
+  color: #ffffff;
+  border-color: #0f766e;
+}
+
 .code-meta {
   font-size: 12px;
   color: var(--muted);
@@ -399,6 +504,22 @@ body {
   flex-wrap: wrap;
 }
 
+.why-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.why-path {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .button.explain-btn {
   height: 34px;
   padding: 0 12px;
@@ -408,6 +529,8 @@ body {
 .explain-error {
   margin: 0;
   font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ai-insights {

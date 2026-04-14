@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import ast
+import builtins
 from dataclasses import dataclass
 from pathlib import Path
 
 from .types import ClassInfo, FileInfo, FunctionInfo, ImportRef
+
+BUILTIN_NAMES = set(dir(builtins))
 
 
 @dataclass
@@ -136,6 +139,8 @@ class ModuleVisitor(ast.NodeVisitor):
             name = func_node.id
             if name in scope.import_aliases:
                 return scope.import_aliases[name]
+            if name in BUILTIN_NAMES:
+                return None
             return f"{self.file_info.module}:{scope.qualname.rsplit('.', 1)[0]}.{name}" if "." in scope.qualname else f"{self.file_info.module}:{name}"
 
         if isinstance(func_node, ast.Attribute):

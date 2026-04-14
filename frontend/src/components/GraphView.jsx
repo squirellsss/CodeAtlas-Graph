@@ -237,6 +237,9 @@ export default function GraphView({
       if (evt.target === cy) {
         selectionNodeIdRef.current = "";
         applyFocus(cy, false);
+        if (onNodeSelectedRef.current) {
+          onNodeSelectedRef.current(null);
+        }
       }
     });
 
@@ -276,20 +279,6 @@ export default function GraphView({
     searchQueryRef.current = (searchText || "").trim().toLowerCase();
     applyFocus(cy, false);
   }, [searchText]);
-
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy || !onSnapshotReadyRef.current) return;
-    if (!graph?.nodes?.length) {
-      onSnapshotReadyRef.current("");
-      return;
-    }
-    if (!enableSnapshot) {
-      onSnapshotReadyRef.current("");
-      return;
-    }
-    onSnapshotReadyRef.current(cy.png({ full: true, scale: 2, bg: "#ffffff" }));
-  }, [graph, enableSnapshot]);
 
   useEffect(() => {
     const cy = cyRef.current;

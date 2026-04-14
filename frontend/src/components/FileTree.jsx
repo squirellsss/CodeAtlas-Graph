@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 function makeDir(name) {
-  return { name, type: "dir", children: new Map(), path: "" };
+  return { name, type: "dir", children: new Map(), path: "", fileCount: 0 };
 }
 
 function makeFile(name, path) {
@@ -11,6 +11,7 @@ function makeFile(name, path) {
 function addFile(root, filePath) {
   const parts = filePath.split("/").filter(Boolean);
   let current = root;
+  current.fileCount += 1;
   parts.forEach((part, index) => {
     const isLast = index === parts.length - 1;
     if (isLast) {
@@ -24,6 +25,7 @@ function addFile(root, filePath) {
     }
     current = current.children.get(part);
     current.path = parts.slice(0, index + 1).join("/");
+    current.fileCount += 1;
   });
 }
 
@@ -32,15 +34,6 @@ function sortNodes(nodes) {
     if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
-}
-
-function countFiles(node) {
-  if (node.type === "file") return 1;
-  let total = 0;
-  node.children.forEach((child) => {
-    total += countFiles(child);
-  });
-  return total;
 }
 
 function TreeNode({ node, level, expanded, toggleExpand, onSelectFile, selectedFile }) {
@@ -75,7 +68,7 @@ function TreeNode({ node, level, expanded, toggleExpand, onSelectFile, selectedF
         <span className="tree-arrow">{isExpanded ? "-" : "+"}</span>
         <span className="tree-icon">DIR</span>
         <span className="tree-name">{node.name}</span>
-        <span className="tree-count">{countFiles(node)}</span>
+        <span className="tree-count">{node.fileCount}</span>
       </button>
       {isExpanded && (
         <ul className="tree-list">

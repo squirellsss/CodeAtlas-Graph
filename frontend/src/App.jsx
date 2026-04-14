@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from "react";
-import { explainFunction, fetchGraph } from "./api";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { explainFunction, fetchGraph, fetchMeta } from "./api";
 import FileTree from "./components/FileTree";
 import GraphView from "./components/GraphView";
 import CodeViewer from "./components/CodeViewer";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 const DEFAULT_PATH = ".";
 
@@ -10,7 +11,7 @@ export default function App() {
   const [repoPath, setRepoPath] = useState(DEFAULT_PATH);
   const [viewMode, setViewMode] = useState("knowledge");
   const [maxNodes, setMaxNodes] = useState(1800);
-  const [graph, setGraph] = useState({ nodes: [], edges: [] });
+  const [graph, setGraph] = useState({ nodes: [], edges: [], warnings: [] });
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedFile, setSelectedFile] = useState("");
   const [searchText, setSearchText] = useState("");
@@ -28,12 +29,37 @@ export default function App() {
   const [explainCache, setExplainCache] = useState({});
   const [explainLoadingKey, setExplainLoadingKey] = useState("");
   const [explainError, setExplainError] = useState("");
+  const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [warningFilter, setWarningFilter] = useState("critical");
+  const [warningsExpanded, setWarningsExpanded] = useState(false);
+  const explainAbortRef = useRef(null);
+  const autoExplainTimerRef = useRef(null);
 
   const filePaths = useMemo(() => graph.files || [], [graph.files]);
+  const parseWarnings = useMemo(() => graph.warnings || [], [graph.warnings]);
+  const displayedWarnings = useMemo(() => {
+    if (warningFilter === "all") return parseWarnings;
+    if (warningFilter === "unresolved_call") {
+      return parseWarnings.filter((w) => w.kind === "unresolved_call");
+    }
+    return parseWarnings.filter((w) => w.kind !== "unresolved_call");
+  }, [parseWarnings, warningFilter]);
+
+  function cancelInflightExplain() {
+    if (autoExplainTimerRef.current) {
+      clearTimeout(autoExplainTimerRef.current);
+      autoExplainTimerRef.current = null;
+    }
+    if (explainAbortRef.current) {
+      explainAbortRef.current.abort();
+      explainAbortRef.current = null;
+    }
+  }
 
   async function onAnalyze() {
     setLoading(true);
     setError("");
+    cancelInflightExplain();
     try {
       const data = await fetchGraph(repoPath, { view: viewMode, maxNodes, includeExternal: false });
       setGraph(data);
@@ -66,7 +92,16 @@ export default function App() {
   }
 
   function onSelectNode(node) {
+    if (!node) {
+      setSelectedNode(null);
+      setSelectedFile("");
+      setExplainError("");
+      setExplainLoadingKey("");
+      cancelInflightExplain();
+      return;
+    }
     setSelectedNode(node);
+    setExplainError("");
     if (node.file) {
       setSelectedFile(node.file);
     }
@@ -74,7 +109,6 @@ export default function App() {
       const dirValue = String(node.id).replace("dir:", "");
       setScopeDir(dirValue === "(root)" ? "" : dirValue);
     }
-    void triggerExplain(node, true);
   }
 
   function makeExplainKey(node) {
@@ -88,7 +122,8 @@ export default function App() {
     return node.type === "function" || node.type === "method" || node.type === "class";
   }
 
-  async function triggerExplain(node, auto = false) {
+  async function triggerExplain(node, options = {}) {
+    const { auto = false, signal } = options;
     if (!canExplain(node)) return;
     const key = makeExplainKey(node);
     if (explainCache[key]) return;
@@ -96,10 +131,13 @@ export default function App() {
     setExplainError("");
     setExplainLoadingKey(key);
     try {
-      const result = await explainFunction(node);
+      const result = await explainFunction(node, { signal, timeoutMs: 22000 });
       setExplainCache((prev) => ({ ...prev, [key]: result }));
     } catch (err) {
-      if (!auto) {
+      if (err?.name === "AbortError") return;
+      if (auto) {
+        setExplainError("Auto explain timed out/failed. Click 'Explain this function' to retry.");
+      } else {
         setExplainError(err.message || "Failed to explain function.");
       }
     } finally {
@@ -150,10 +188,52 @@ export default function App() {
     { label: "Nodes", value: `${filteredGraph.nodes.length}/${graph.nodes.length}` },
     { label: "Edges", value: `${filteredGraph.edges.length}/${graph.edges.length}` },
     { label: "Selected", value: selectedNode?.label || "-" },
+    { label: "Warnings", value: `${displayedWarnings.length}/${parseWarnings.length}` },
   ];
   const selectedExplainKey = makeExplainKey(selectedNode);
   const selectedExplanation = selectedExplainKey ? explainCache[selectedExplainKey] : null;
   const selectedExplainLoading = selectedExplainKey && explainLoadingKey === selectedExplainKey;
+
+  useEffect(() => {
+    cancelInflightExplain();
+    if (!selectedNode || !canExplain(selectedNode)) return undefined;
+    const key = makeExplainKey(selectedNode);
+    if (explainCache[key]) return undefined;
+    const controller = new AbortController();
+    explainAbortRef.current = controller;
+    autoExplainTimerRef.current = setTimeout(() => {
+      void triggerExplain(selectedNode, { auto: true, signal: controller.signal });
+    }, 650);
+    return () => {
+      cancelInflightExplain();
+    };
+  }, [selectedNode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function onExplainClick() {
+    cancelInflightExplain();
+    if (!selectedNode) return;
+    const controller = new AbortController();
+    explainAbortRef.current = controller;
+    void triggerExplain(selectedNode, { auto: false, signal: controller.signal });
+  }
+
+  useEffect(() => () => cancelInflightExplain(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let mounted = true;
+    fetchMeta()
+      .then((meta) => {
+        if (!mounted) return;
+        setWorkspaceRoot(meta.workspace_root || "");
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setWorkspaceRoot("");
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
     <div className="app-shell">
@@ -162,7 +242,7 @@ export default function App() {
           className="input path-input"
           value={repoPath}
           onChange={(e) => setRepoPath(e.target.value)}
-          placeholder="Repository path (e.g. D:/files/project)"
+          placeholder="Repository path (relative to workspace root)"
         />
         <button className="button" onClick={onAnalyze} disabled={loading}>
           {loading ? "Analyzing..." : "Analyze"}
@@ -221,6 +301,7 @@ export default function App() {
           Clear Scope
         </button>
         <span className="scope-text">Scope: {scopeDir || "Global"}</span>
+        {workspaceRoot && <span className="scope-text">Workspace: {workspaceRoot}</span>}
       </div>
       <div className="stats-banner">
         {summaryItems.map((item) => (
@@ -235,6 +316,50 @@ export default function App() {
         <aside className="panel panel-left">
           <h3>File Tree</h3>
           <FileTree filePaths={filePaths} onSelectFile={onSelectFile} selectedFile={selectedFile} />
+          <div className="warnings-panel">
+            <div className="warnings-head-row">
+              <div className="warnings-head">Parse Warnings ({displayedWarnings.length})</div>
+              <div className="warnings-controls">
+                <select
+                  className="input warning-filter"
+                  value={warningFilter}
+                  onChange={(e) => setWarningFilter(e.target.value)}
+                  title="Warning filter"
+                >
+                  <option value="critical">critical only</option>
+                  <option value="all">all</option>
+                  <option value="unresolved_call">unresolved_call</option>
+                </select>
+                <button
+                  className="button secondary warning-toggle"
+                  onClick={() => setWarningsExpanded((v) => !v)}
+                >
+                  {warningsExpanded ? "Hide" : "Show"}
+                </button>
+              </div>
+            </div>
+            {!warningsExpanded ? (
+              <div className="empty-state">Warnings panel is collapsed.</div>
+            ) : !displayedWarnings.length ? (
+              <div className="empty-state">No parser warnings.</div>
+            ) : (
+              <>
+                <div className="warning-help">Showing first 30 warnings in selected filter.</div>
+              <ul className="warnings-list">
+                {displayedWarnings.slice(0, 30).map((warn, idx) => (
+                  <li key={`${warn.file}-${warn.kind}-${idx}`} className="warning-item">
+                    <div className="warning-file">{warn.file}</div>
+                    <div className="warning-meta">
+                      {warn.kind}
+                      {warn.lineno ? ` @L${warn.lineno}` : ""}
+                    </div>
+                    <div className="warning-message">{warn.message}</div>
+                  </li>
+                ))}
+              </ul>
+              </>
+            )}
+          </div>
         </aside>
         <section className="panel panel-center">
           <h3>Graph</h3>
@@ -266,43 +391,21 @@ export default function App() {
           />
         </section>
         <aside className="panel panel-right">
-          <h3>Code Viewer</h3>
-          <div className="guide-box">
-            <div className="guide-title">How to read this graph</div>
-            <div className="guide-text">Click a node to focus on its local neighborhood.</div>
-            <div className="guide-text">Use search to highlight matching nodes by name.</div>
-            <div className="guide-text">Click blank area to clear focus and return to overview.</div>
-          </div>
-          <div className="snapshot-wrap">
-            <div className="snapshot-head">
-              <span>Graph Snapshot</span>
-              <a
-                className={`snapshot-download ${snapshot ? "" : "disabled"}`}
-                href={snapshot || "#"}
-                download="graph.png"
-                onClick={(e) => !snapshot && e.preventDefault()}
-              >
-                Download PNG
-              </a>
-            </div>
-            {snapshot ? (
-              <img className="snapshot-image" src={snapshot} alt="Graph Snapshot" />
-            ) : (
-              <div className="empty-state">
-                {filteredGraph.nodes.length > 2500
-                  ? "Snapshot is disabled for very large graphs to keep UI responsive."
-                  : "A graph snapshot will appear after analysis."}
-              </div>
-            )}
-          </div>
-          <CodeViewer
-            selected={selectedNode}
-            explanation={selectedExplanation}
-            explainLoading={Boolean(selectedExplainLoading)}
-            explainError={explainError}
-            onExplain={() => triggerExplain(selectedNode, false)}
-            canExplain={canExplain(selectedNode)}
-          />
+          <h3>Inspector</h3>
+          <ErrorBoundary>
+            <CodeViewer
+              selected={selectedNode}
+              explanation={selectedExplanation}
+              explainLoading={Boolean(selectedExplainLoading)}
+              explainError={explainError}
+              onExplain={onExplainClick}
+              canExplain={canExplain(selectedNode)}
+              warnings={displayedWarnings}
+              graphNodes={filteredGraph.nodes}
+              graphEdges={filteredGraph.edges}
+              snapshot={snapshot}
+            />
+          </ErrorBoundary>
         </aside>
       </main>
     </div>

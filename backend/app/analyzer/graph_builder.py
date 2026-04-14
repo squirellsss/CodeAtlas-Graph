@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 from typing import Literal
 
-from ..models import GraphEdge, GraphNode, GraphResponse
+from ..models import GraphEdge, GraphNode, GraphResponse, ParseWarning
 
 from .extractor import parse_python_file
 from .types import FileInfo
 
 GraphView = Literal["directory", "overview", "full", "knowledge"]
+BUILTIN_NAMES = set(dir(builtins))
 
 
 IGNORED_DIRS = {
@@ -38,6 +40,28 @@ def discover_python_files(root_path: Path) -> list[Path]:
     return paths
 
 
+def _append_warning(
+    warnings: list[ParseWarning],
+    warning_keys: set[tuple[str, str, str, int | None]],
+    file: str,
+    kind: str,
+    message: str,
+    lineno: int | None,
+) -> None:
+    key = (file, kind, message, lineno)
+    if key in warning_keys:
+        return
+    warning_keys.add(key)
+    warnings.append(
+        ParseWarning(
+            file=file,
+            kind=kind,
+            message=message,
+            lineno=lineno,
+        )
+    )
+
+
 def analyze_repository(
     path: str,
     view: GraphView = "knowledge",
@@ -49,19 +73,50 @@ def analyze_repository(
         raise ValueError(f"Invalid directory path: {path}")
 
     file_infos: dict[str, FileInfo] = {}
+    warnings: list[ParseWarning] = []
+    warning_keys: set[tuple[str, str, str, int | None]] = set()
     for file_path in discover_python_files(root_path):
         try:
             file_info = parse_python_file(root_path=root_path, file_path=file_path)
             file_infos[file_info.module] = file_info
-        except SyntaxError:
+        except SyntaxError as exc:
+            rel_file = str(file_path.relative_to(root_path)).replace("\\", "/")
+            _append_warning(
+                warnings=warnings,
+                warning_keys=warning_keys,
+                file=rel_file,
+                kind="syntax_error",
+                message=str(exc.msg if hasattr(exc, "msg") else exc),
+                lineno=getattr(exc, "lineno", None),
+            )
             continue
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as exc:
+            rel_file = str(file_path.relative_to(root_path)).replace("\\", "/")
+            _append_warning(
+                warnings=warnings,
+                warning_keys=warning_keys,
+                file=rel_file,
+                kind="decode_error",
+                message=f"{exc.encoding} decode error: {exc.reason}",
+                lineno=None,
+            )
+            continue
+        except Exception as exc:  # pragma: no cover - defensive: unexpected parser edge cases
+            rel_file = str(file_path.relative_to(root_path)).replace("\\", "/")
+            _append_warning(
+                warnings=warnings,
+                warning_keys=warning_keys,
+                file=rel_file,
+                kind="parse_error",
+                message=str(exc),
+                lineno=None,
+            )
             continue
 
     nodes: dict[str, GraphNode] = {}
     edges: set[tuple[str, str, str]] = set()
     weighted_edges: dict[tuple[str, str, str], int] = {}
-    function_name_index: dict[tuple[str, str], str] = {}
+    function_name_index: dict[tuple[str, str], list[str]] = {}
     known_modules = set(file_infos.keys())
     all_function_ids: set[str] = set()
 
@@ -74,6 +129,7 @@ def analyze_repository(
             include_external=include_external,
             max_nodes=max_nodes,
             files=all_files,
+            warnings=warnings,
         )
 
     if view == "knowledge":
@@ -83,6 +139,8 @@ def analyze_repository(
             include_external=include_external,
             max_nodes=max_nodes,
             files=all_files,
+            warnings=warnings,
+            warning_keys=warning_keys,
         )
 
     for module, info in file_infos.items():
@@ -114,7 +172,7 @@ def analyze_repository(
                 end_lineno=function.end_lineno,
                 code=function.code,
             )
-            function_name_index[(module, function.name)] = function.id
+            function_name_index.setdefault((module, function.name), []).append(function.id)
             all_function_ids.add(function.id)
 
     for module, info in file_infos.items():
@@ -152,8 +210,26 @@ def analyze_repository(
                     all_functions=all_function_ids,
                 )
                 if not resolved_target:
+                    if _should_warn_unresolved(raw_target, module):
+                        _append_warning(
+                            warnings=warnings,
+                            warning_keys=warning_keys,
+                            file=function.file_path,
+                            kind="unresolved_call",
+                            message=f"{function.qualname} -> {raw_target}",
+                            lineno=function.lineno,
+                        )
                     continue
                 if resolved_target not in nodes:
+                    if _should_warn_unresolved(raw_target, module):
+                        _append_warning(
+                            warnings=warnings,
+                            warning_keys=warning_keys,
+                            file=function.file_path,
+                            kind="unresolved_call",
+                            message=f"{function.qualname} -> {raw_target}",
+                            lineno=function.lineno,
+                        )
                     continue
                 edges.add((function.id, resolved_target, "calls"))
                 weighted_edges[(function.id, resolved_target, "calls")] = (
@@ -172,13 +248,14 @@ def analyze_repository(
             for s, t, kind in sorted(edges)
         ],
         files=all_files,
+        warnings=warnings,
     )
 
 
 def _resolve_call_target(
     raw_target: str,
     current_module: str,
-    function_name_index: dict[tuple[str, str], str],
+    function_name_index: dict[tuple[str, str], list[str]],
     all_functions: set[str],
 ) -> str | None:
     if raw_target in all_functions:
@@ -188,16 +265,49 @@ def _resolve_call_target(
     if ":" in raw_target:
         _, short_name = raw_target.split(":", 1)
         terminal = short_name.split(".")[-1]
-        return function_name_index.get((current_module, terminal))
+        candidates = function_name_index.get((current_module, terminal), [])
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        exact_suffix = [c for c in candidates if c.endswith(f".{short_name}")]
+        if len(exact_suffix) == 1:
+            return exact_suffix[0]
+        return None
     parts = raw_target.split(".")
     if len(parts) >= 2:
         module = ".".join(parts[:-1])
         name = parts[-1]
-        local = function_name_index.get((module, name))
-        if local:
-            return local
+        local = function_name_index.get((module, name), [])
+        if len(local) == 1:
+            return local[0]
         return None
-    return function_name_index.get((current_module, raw_target))
+    local = function_name_index.get((current_module, raw_target), [])
+    if len(local) == 1:
+        return local[0]
+    return None
+
+
+def _should_warn_unresolved(raw_target: str, current_module: str) -> bool:
+    if not raw_target:
+        return False
+
+    terminal = raw_target
+    if ":" in raw_target:
+        _, short_name = raw_target.split(":", 1)
+        terminal = short_name.split(".")[-1]
+    elif "." in raw_target:
+        terminal = raw_target.split(".")[-1]
+
+    if terminal in BUILTIN_NAMES:
+        return False
+
+    if ":" not in raw_target and "." in raw_target:
+        module_prefix = ".".join(raw_target.split(".")[:-1])
+        if module_prefix and not module_prefix.startswith(current_module):
+            return False
+
+    return True
 
 
 def _resolve_module_reference(current_module: str, imported_module: str, known_modules) -> str | None:
@@ -248,6 +358,7 @@ def _build_directory_graph(
     include_external: bool,
     max_nodes: int,
     files: list[str],
+    warnings: list[ParseWarning],
 ) -> GraphResponse:
     nodes: dict[str, GraphNode] = {}
     edges: dict[tuple[str, str, str], int] = {}
@@ -267,7 +378,7 @@ def _build_directory_graph(
         node_id = f"dir:{directory}"
         nodes[node_id] = GraphNode(
             id=node_id,
-            type="file",
+            type="directory",
             label=f"{directory} ({count})",
             file=directory,
         )
@@ -292,7 +403,7 @@ def _build_directory_graph(
                 if target_id not in nodes:
                     nodes[target_id] = GraphNode(
                         id=target_id,
-                        type="file",
+                        type="directory",
                         label=target_id.replace("dir:", ""),
                         file=target_id.replace("dir:", ""),
                     )
@@ -316,6 +427,7 @@ def _build_directory_graph(
             for (s, t, kind), weight in sorted(edges.items())
         ],
         files=files,
+        warnings=warnings,
     )
 
 
@@ -325,10 +437,12 @@ def _build_knowledge_graph(
     include_external: bool,
     max_nodes: int,
     files: list[str],
+    warnings: list[ParseWarning],
+    warning_keys: set[tuple[str, str, str, int | None]],
 ) -> GraphResponse:
     nodes: dict[str, GraphNode] = {}
     edges: dict[tuple[str, str, str], int] = {}
-    function_name_index: dict[tuple[str, str], str] = {}
+    function_name_index: dict[tuple[str, str], list[str]] = {}
     all_function_ids: set[str] = set()
 
     # Build directory hierarchy first: dir:(root) -> dir:a -> dir:a/b ...
@@ -404,7 +518,7 @@ def _build_knowledge_graph(
                 },
             )
             all_function_ids.add(function.id)
-            function_name_index[(module, function.name)] = function.id
+            function_name_index.setdefault((module, function.name), []).append(function.id)
 
             if function.class_name:
                 class_node_id = f"{module}:{function.class_name}"
@@ -448,6 +562,15 @@ def _build_knowledge_graph(
                     all_functions=all_function_ids,
                 )
                 if not resolved_target or resolved_target not in nodes:
+                    if _should_warn_unresolved(raw_target, module):
+                        _append_warning(
+                            warnings=warnings,
+                            warning_keys=warning_keys,
+                            file=function.file_path,
+                            kind="unresolved_call",
+                            message=f"{function.qualname} -> {raw_target}",
+                            lineno=function.lineno,
+                        )
                     continue
                 key = (function.id, resolved_target, "calls")
                 edges[key] = edges.get(key, 0) + 1
@@ -465,4 +588,5 @@ def _build_knowledge_graph(
             for (s, t, kind), weight in sorted(edges.items())
         ],
         files=files,
+        warnings=warnings,
     )
