@@ -67,3 +67,23 @@ export async function fetchMeta() {
   }
   return response.json();
 }
+
+export async function explainAll(options = {}) {
+  const url = new URL("/explain/all", API_BASE);
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      path: options.path || ".",
+      view: options.view || "knowledge",
+      max_nodes: options.maxNodes || 3000,
+      include_external: Boolean(options.includeExternal),
+      limit: options.limit ?? null,
+    }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || `Request failed: ${response.status}`);
+  }
+  return response.json();
+}

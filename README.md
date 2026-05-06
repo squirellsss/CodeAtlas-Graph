@@ -48,6 +48,9 @@ Backend environment:
 
 - `ANALYZE_WORKSPACE_ROOT` (optional, restricts `/analyze` to this root directory)
 - `CORS_ALLOW_ORIGINS` (optional, comma-separated origins)
+- `MAX_SCAN_FILES` (optional, default `2000`)
+- `MAX_SCAN_BYTES_PER_FILE` (optional, default `2000000`)
+- `MAX_SCAN_TOTAL_BYTES` (optional, default `50000000`)
 
 Path note:
 
@@ -62,6 +65,7 @@ Backend LLM environment:
 - `OPENROUTER_MODEL` (optional, default: `openrouter/free`)
 - `OPENAI_API_KEY` (optional, final fallback)
 - `EXPLAIN_MAX_CODE_CHARS` (optional, default: `12000`, trims very large code before explain)
+- `LLM_REQUEST_TIMEOUT_SECONDS` (optional, default: `25`)
 
 Quick start (no paid API required):
 
@@ -126,6 +130,7 @@ Coverage in this test file:
 - Three-panel responsive UI: file tree, graph canvas, code viewer.
 - AI function insight: click node or use "Explain this function" to generate purpose + input/output summary.
 - Explain output includes purpose, input/output, side effects, and potential risks.
+- Explain All precomputes explanations for eligible nodes and persists them to SQLite cache.
 - Auto-explain uses delayed trigger and cancellation to avoid API bursts while quickly switching nodes.
 - Explanation cache on backend (LRU) and frontend (per-node session cache) to reduce repeated API calls.
 - Multi-provider LLM fallback: local Ollama first, then OpenRouter free, then OpenAI.

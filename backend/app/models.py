@@ -39,6 +39,10 @@ class ParseWarning(BaseModel):
     kind: Literal["syntax_error", "decode_error", "parse_error", "unresolved_call"]
     message: str
     lineno: int | None = None
+    confidence: Literal["high", "medium", "low"] | None = None
+    origin: Literal["internal", "external", "dynamic", "parser"] | None = None
+    confidence: Literal["high", "medium", "low"] | None = None
+    origin: Literal["internal", "external", "dynamic", "parser"] | None = None
 
 
 class ExplainRequest(BaseModel):
@@ -58,6 +62,22 @@ class ExplainResponse(BaseModel):
     side_effects: str = "Not available."
     risks: str = "Not available."
     cached: bool = False
+
+
+class ExplainAllRequest(BaseModel):
+    path: str = "."
+    view: Literal["directory", "overview", "full", "knowledge"] = "knowledge"
+    max_nodes: int = 3000
+    include_external: bool = False
+    limit: int | None = None
+
+
+class ExplainAllResponse(BaseModel):
+    total_candidates: int
+    explained_count: int
+    cached_count: int
+    failed_count: int
+    failed_node_ids: list[str] = Field(default_factory=list)
 
 
 class ServerMetaResponse(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -40,15 +41,22 @@ def discover_python_files(root_path: Path) -> list[Path]:
     return paths
 
 
+def _read_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    return int(raw) if raw.isdigit() else default
+
+
 def _append_warning(
     warnings: list[ParseWarning],
-    warning_keys: set[tuple[str, str, str, int | None]],
+    warning_keys: set[tuple[str, str, str, int | None, str | None, str | None]],
     file: str,
     kind: str,
     message: str,
     lineno: int | None,
+    confidence: str | None = None,
+    origin: str | None = None,
 ) -> None:
-    key = (file, kind, message, lineno)
+    key = (file, kind, message, lineno, confidence, origin)
     if key in warning_keys:
         return
     warning_keys.add(key)
@@ -58,6 +66,8 @@ def _append_warning(
             kind=kind,
             message=message,
             lineno=lineno,
+            confidence=confidence,
+            origin=origin,
         )
     )
 
@@ -74,8 +84,56 @@ def analyze_repository(
 
     file_infos: dict[str, FileInfo] = {}
     warnings: list[ParseWarning] = []
-    warning_keys: set[tuple[str, str, str, int | None]] = set()
-    for file_path in discover_python_files(root_path):
+    warning_keys: set[tuple[str, str, str, int | None, str | None, str | None]] = set()
+    max_scan_files = _read_int_env("MAX_SCAN_FILES", 2000)
+    max_file_bytes = _read_int_env("MAX_SCAN_BYTES_PER_FILE", 2_000_000)
+    max_total_bytes = _read_int_env("MAX_SCAN_TOTAL_BYTES", 50_000_000)
+    scanned_total_bytes = 0
+
+    for index, file_path in enumerate(discover_python_files(root_path), start=1):
+        if max_scan_files > 0 and index > max_scan_files:
+            _append_warning(
+                warnings=warnings,
+                warning_keys=warning_keys,
+                file="(scan)",
+                kind="parse_error",
+                message=f"Stopped scanning at MAX_SCAN_FILES={max_scan_files}.",
+                lineno=None,
+                confidence="high",
+                origin="parser",
+            )
+            break
+        try:
+            size_bytes = file_path.stat().st_size
+        except OSError:
+            size_bytes = 0
+        if max_file_bytes > 0 and size_bytes > max_file_bytes:
+            rel_file = str(file_path.relative_to(root_path)).replace("\\", "/")
+            _append_warning(
+                warnings=warnings,
+                warning_keys=warning_keys,
+                file=rel_file,
+                kind="parse_error",
+                message=f"Skipped file > MAX_SCAN_BYTES_PER_FILE ({size_bytes} bytes).",
+                lineno=None,
+                confidence="high",
+                origin="parser",
+            )
+            continue
+        scanned_total_bytes += size_bytes
+        if max_total_bytes > 0 and scanned_total_bytes > max_total_bytes:
+            _append_warning(
+                warnings=warnings,
+                warning_keys=warning_keys,
+                file="(scan)",
+                kind="parse_error",
+                message=f"Stopped scanning at MAX_SCAN_TOTAL_BYTES={max_total_bytes}.",
+                lineno=None,
+                confidence="high",
+                origin="parser",
+            )
+            break
+
         try:
             file_info = parse_python_file(root_path=root_path, file_path=file_path)
             file_infos[file_info.module] = file_info
@@ -88,6 +146,8 @@ def analyze_repository(
                 kind="syntax_error",
                 message=str(exc.msg if hasattr(exc, "msg") else exc),
                 lineno=getattr(exc, "lineno", None),
+                confidence="high",
+                origin="parser",
             )
             continue
         except UnicodeDecodeError as exc:
@@ -99,6 +159,8 @@ def analyze_repository(
                 kind="decode_error",
                 message=f"{exc.encoding} decode error: {exc.reason}",
                 lineno=None,
+                confidence="high",
+                origin="parser",
             )
             continue
         except Exception as exc:  # pragma: no cover - defensive: unexpected parser edge cases
@@ -110,6 +172,8 @@ def analyze_repository(
                 kind="parse_error",
                 message=str(exc),
                 lineno=None,
+                confidence="high",
+                origin="parser",
             )
             continue
 
@@ -211,6 +275,7 @@ def analyze_repository(
                 )
                 if not resolved_target:
                     if _should_warn_unresolved(raw_target, module):
+                        confidence, origin = _classify_unresolved(raw_target, module)
                         _append_warning(
                             warnings=warnings,
                             warning_keys=warning_keys,
@@ -218,10 +283,13 @@ def analyze_repository(
                             kind="unresolved_call",
                             message=f"{function.qualname} -> {raw_target}",
                             lineno=function.lineno,
+                            confidence=confidence,
+                            origin=origin,
                         )
                     continue
                 if resolved_target not in nodes:
                     if _should_warn_unresolved(raw_target, module):
+                        confidence, origin = _classify_unresolved(raw_target, module)
                         _append_warning(
                             warnings=warnings,
                             warning_keys=warning_keys,
@@ -229,6 +297,8 @@ def analyze_repository(
                             kind="unresolved_call",
                             message=f"{function.qualname} -> {raw_target}",
                             lineno=function.lineno,
+                            confidence=confidence,
+                            origin=origin,
                         )
                     continue
                 edges.add((function.id, resolved_target, "calls"))
@@ -308,6 +378,29 @@ def _should_warn_unresolved(raw_target: str, current_module: str) -> bool:
             return False
 
     return True
+
+
+def _classify_unresolved(raw_target: str, current_module: str) -> tuple[str, str]:
+    if not raw_target:
+        return ("low", "dynamic")
+
+    terminal = raw_target
+    if ":" in raw_target:
+        module_part, short_name = raw_target.split(":", 1)
+        terminal = short_name.split(".")[-1]
+        if module_part and module_part != current_module:
+            return ("low", "external")
+    elif "." in raw_target:
+        terminal = raw_target.split(".")[-1]
+        module_prefix = ".".join(raw_target.split(".")[:-1])
+        if module_prefix and not module_prefix.startswith(current_module):
+            return ("low", "external")
+
+    if terminal in BUILTIN_NAMES:
+        return ("low", "external")
+    if terminal.startswith("_"):
+        return ("medium", "dynamic")
+    return ("high", "internal")
 
 
 def _resolve_module_reference(current_module: str, imported_module: str, known_modules) -> str | None:
@@ -438,7 +531,7 @@ def _build_knowledge_graph(
     max_nodes: int,
     files: list[str],
     warnings: list[ParseWarning],
-    warning_keys: set[tuple[str, str, str, int | None]],
+    warning_keys: set[tuple[str, str, str, int | None, str | None, str | None]],
 ) -> GraphResponse:
     nodes: dict[str, GraphNode] = {}
     edges: dict[tuple[str, str, str], int] = {}
@@ -563,6 +656,7 @@ def _build_knowledge_graph(
                 )
                 if not resolved_target or resolved_target not in nodes:
                     if _should_warn_unresolved(raw_target, module):
+                        confidence, origin = _classify_unresolved(raw_target, module)
                         _append_warning(
                             warnings=warnings,
                             warning_keys=warning_keys,
@@ -570,6 +664,8 @@ def _build_knowledge_graph(
                             kind="unresolved_call",
                             message=f"{function.qualname} -> {raw_target}",
                             lineno=function.lineno,
+                            confidence=confidence,
+                            origin=origin,
                         )
                     continue
                 key = (function.id, resolved_target, "calls")

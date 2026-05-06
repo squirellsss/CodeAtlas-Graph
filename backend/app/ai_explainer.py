@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 import ast
@@ -41,9 +42,11 @@ class LLMExplainService:
         self._lock = threading.Lock()
         self._backend_root = Path(__file__).resolve().parents[1]
         self._project_root = Path(__file__).resolve().parents[2]
+        self._cache_db_path = self._project_root / ".cache" / "explain_cache.sqlite3"
         self._dotenv_cache: dict[str, str] = {}
         self._dotenv_cache_stamp: tuple[tuple[str, float], ...] = ()
         self._dotenv_cache_loaded_at: float = 0.0
+        self._ensure_cache_db()
 
     def explain(self, payload: ExplainPayload) -> ExplainResponse:
         if not payload.code.strip():
@@ -78,9 +81,14 @@ class LLMExplainService:
             cached = self._cache_get(cache_key)
             if cached:
                 return ExplainResponse(**cached.model_dump(), cached=True)
+            cached = self._sqlite_cache_get(cache_key)
+            if cached:
+                self._cache_set(cache_key, cached)
+                return ExplainResponse(**cached.model_dump(), cached=True)
             try:
                 response = self._call_with_provider(payload, cfg)
                 self._cache_set(cache_key, response)
+                self._sqlite_cache_set(cache_key, response)
                 return response
             except RuntimeError as exc:
                 provider_errors[cfg.provider] = str(exc)
@@ -90,8 +98,13 @@ class LLMExplainService:
         fallback_cached = self._cache_get(fallback_key)
         if fallback_cached:
             return ExplainResponse(**fallback_cached.model_dump(), cached=True)
+        fallback_cached = self._sqlite_cache_get(fallback_key)
+        if fallback_cached:
+            self._cache_set(fallback_key, fallback_cached)
+            return ExplainResponse(**fallback_cached.model_dump(), cached=True)
         fallback = self._fallback_explain(payload, provider_errors)
         self._cache_set(fallback_key, fallback)
+        self._sqlite_cache_set(fallback_key, fallback)
         return fallback
 
     def _make_cache_key(self, payload: ExplainPayload, provider: str, model: str) -> str:
@@ -124,6 +137,54 @@ class LLMExplainService:
             self._cache[key] = value
             while len(self._cache) > self.cache_size:
                 self._cache.popitem(last=False)
+
+    def _ensure_cache_db(self) -> None:
+        self._cache_db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self._cache_db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS explain_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.commit()
+
+    def _sqlite_cache_get(self, key: str) -> ExplainResponse | None:
+        try:
+            with sqlite3.connect(self._cache_db_path) as conn:
+                row = conn.execute(
+                    "SELECT payload_json FROM explain_cache WHERE cache_key = ?",
+                    (key,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        if not row:
+            return None
+        try:
+            payload = json.loads(row[0])
+            return ExplainResponse.model_validate(payload)
+        except Exception:
+            return None
+
+    def _sqlite_cache_set(self, key: str, value: ExplainResponse) -> None:
+        try:
+            with sqlite3.connect(self._cache_db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO explain_cache (cache_key, payload_json, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(cache_key) DO UPDATE SET
+                        payload_json = excluded.payload_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (key, value.model_dump_json(), time.time()),
+                )
+                conn.commit()
+        except sqlite3.Error:
+            return
 
     def _call_with_provider(self, payload: ExplainPayload, cfg: ProviderConfig) -> ExplainResponse:
         if cfg.provider == "ollama":

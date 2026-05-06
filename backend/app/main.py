@@ -9,7 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .analyzer.graph_builder import analyze_repository
 from .ai_explainer import ExplainPayload, LLMExplainService
-from .models import ExplainRequest, ExplainResponse, GraphResponse, ServerMetaResponse
+from .models import (
+    ExplainAllRequest,
+    ExplainAllResponse,
+    ExplainRequest,
+    ExplainResponse,
+    GraphResponse,
+    ServerMetaResponse,
+)
 
 app = FastAPI(title="Repository Graph Analyzer", version="1.0.0")
 explain_service = LLMExplainService()
@@ -98,4 +105,56 @@ def meta() -> ServerMetaResponse:
     return ServerMetaResponse(
         workspace_root=str(WORKSPACE_ROOT),
         cors_allow_origins=_parse_cors_origins(),
+    )
+
+
+@app.post("/explain/all", response_model=ExplainAllResponse)
+def explain_all(request: ExplainAllRequest) -> ExplainAllResponse:
+    requested_path = Path(request.path)
+    if not requested_path.is_absolute():
+        resolved_path = (WORKSPACE_ROOT / requested_path).resolve()
+    else:
+        resolved_path = requested_path.resolve()
+    try:
+        resolved_path.relative_to(WORKSPACE_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Path must stay within workspace root.") from exc
+
+    graph = analyze_repository(
+        path=str(resolved_path),
+        view=request.view,
+        include_external=request.include_external,
+        max_nodes=request.max_nodes,
+    )
+    candidates = [node for node in graph.nodes if node.code and node.type in {"function", "method", "class"}]
+    if request.limit is not None and request.limit > 0:
+        candidates = candidates[: request.limit]
+
+    explained_count = 0
+    cached_count = 0
+    failed_node_ids: list[str] = []
+    for node in candidates:
+        try:
+            result = explain_service.explain(
+                ExplainPayload(
+                    node_id=node.id,
+                    node_type=node.type,
+                    code=node.code or "",
+                    file=node.file,
+                    lineno=node.lineno,
+                    end_lineno=node.end_lineno,
+                )
+            )
+            explained_count += 1
+            if result.cached:
+                cached_count += 1
+        except RuntimeError:
+            failed_node_ids.append(node.id)
+
+    return ExplainAllResponse(
+        total_candidates=len(candidates),
+        explained_count=explained_count,
+        cached_count=cached_count,
+        failed_count=len(failed_node_ids),
+        failed_node_ids=failed_node_ids,
     )
